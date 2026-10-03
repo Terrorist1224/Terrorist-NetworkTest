@@ -1,0 +1,66 @@
+{
+  "name": "terrorist-networktest",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": "Terrorist NetworkTest contributors",
+  "description": "Windows download speed test client with pause, history, and tray support",
+  "private": true,
+  "type": "module",
+  "productName": "TerroristNetWorkTest",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "test": "vitest run",
+    "smoke": "npm run build && node tests/electron-smoke.mjs",
+    "package:win": "npm run typecheck && npm test && npm run build && electron-builder --win dir --x64 && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-win.ps1",
+    "format": "prettier --write src tests electron.vite.config.ts package.json tsconfig.json tsconfig.node.json"
+  },
+  "dependencies": {
+    "echarts": "^6.1.0",
+    "vue": "^3.5.43"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "electron": "44.4.5",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "prettier": "^3.9.9",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.0.0",
+    "vue-tsc": "^3.0.0"
+  },
+  "build": {
+    "appId": "com.terrorist.networktest",
+    "productName": "TerroristNetWorkTest",
+    "asar": true,
+    "artifactName": "Terrorist NetworkTest ${version}.${ext}",
+    "directories": {
+      "buildResources": "resources",
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/tray.png",
+        "to": "tray.png"
+      }
+    ],
+    "win": {
+      "executableName": "TerroristNetWorkTest",
+      "icon": "resources/app.ico",
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["x64"]
+        }
+      ]
+    }
+  }
+}

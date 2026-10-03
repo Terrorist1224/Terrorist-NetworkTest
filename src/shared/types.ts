@@ -1,0 +1,82 @@
+export type StopReason =
+  'manual' | 'time-limit' | 'traffic-limit' | 'channel-error' | 'quit' | 'interrupted'
+export type Region = 'domestic' | 'global' | 'custom'
+
+// “自动”线程数在后台固定使用 8 个下载任务，避免根据机器状态频繁伸缩。
+export const AUTO_THREAD_COUNT = 8
+
+export interface Channel {
+  id: string
+  label: string
+  url: string
+  region: Region
+  custom?: boolean
+}
+
+export interface Limits {
+  maxDurationSec: number
+  maxBytes: number
+}
+
+export interface TestSettings extends Limits {
+  channelId: string
+  threadCount: number
+}
+
+export type StopMode = 'unlimited' | 'traffic' | 'time'
+
+export interface SpeedSample {
+  at: number
+  bytesPerSec: number
+  totalBytes: number
+}
+
+export interface TestSegment {
+  at: number
+  channelId: string
+  threadCount: number
+  startBytes: number
+  endAt?: number
+  endBytes?: number
+}
+
+export interface TestRecord {
+  id: string
+  startedAt: number
+  endedAt?: number
+  activeDurationMs: number
+  stopReason?: StopReason
+  totalBytes: number
+  averageBytesPerSec: number
+  peakBytesPerSec: number
+  settings: TestSettings
+  samples: SpeedSample[]
+  segments: TestSegment[]
+  error?: string
+}
+
+export interface AppSnapshot {
+  running: boolean
+  paused: boolean
+  settings: TestSettings
+  channels: Channel[]
+  record: TestRecord | null
+  error: string | null
+}
+
+export interface DesktopApi {
+  snapshot(): Promise<AppSnapshot>
+  start(settings: TestSettings): Promise<AppSnapshot>
+  pause(): Promise<AppSnapshot>
+  resume(): Promise<AppSnapshot>
+  stop(): Promise<AppSnapshot>
+  changeChannel(channelId: string): Promise<AppSnapshot>
+  changeThreads(threadCount: number): Promise<AppSnapshot>
+  saveLimits(limits: Limits): Promise<AppSnapshot>
+  addChannel(label: string, url: string): Promise<AppSnapshot>
+  removeChannel(id: string): Promise<AppSnapshot>
+  history(): Promise<TestRecord[]>
+  minimizeMain(): Promise<void>
+  closeMain(): Promise<void>
+  onSnapshot(callback: (snapshot: AppSnapshot) => void): () => void
+}
