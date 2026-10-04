@@ -17,8 +17,10 @@ import type {
   TrafficDirection,
   TestMode
 } from '../shared/types'
+import { trimCurveData } from '../shared/curve-window'
 
 type RecordEvent =
+  | { kind: 'snapshot'; record: TestRecord }
   | { kind: 'start'; id: string; at: number; settings: TestSettings }
   | { kind: 'segment'; segment: TestSegment }
   | {
@@ -45,7 +47,8 @@ export function parseRecord(text: string): TestRecord | null {
   let record: TestRecord | null = null
   let latestEventAt = 0
   let hasActiveDuration = false
-  const sampleRates = new Map<number, { download: number; upload: number }>()
+  let sampleRatesAt = -1
+  let sampleRates = { download: 0, upload: 0 }
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue
     let event: RecordEvent
@@ -54,7 +57,17 @@ export function parseRecord(text: string): TestRecord | null {
     } catch {
       continue
     }
-    if (event.kind === 'start') {
+    if (event.kind === 'snapshot') {
+      record = structuredClone(event.record)
+      latestEventAt = Math.max(
+        record.endedAt ?? 0,
+        record.samples.at(-1)?.at ?? 0,
+        record.uploadSamples.at(-1)?.at ?? 0,
+        record.segments.at(-1)?.at ?? 0,
+        record.startedAt
+      )
+      hasActiveDuration = Number.isFinite(record.activeDurationMs)
+    } else if (event.kind === 'start') {
       const mode: TestMode =
         event.settings.mode === 'upload' || event.settings.mode === 'parallel'
           ? event.settings.mode
@@ -88,6 +101,7 @@ export function parseRecord(text: string): TestRecord | null {
       }
       record.segments.push(event.segment)
       latestEventAt = event.segment.at
+      trimCurveData(record, latestEventAt)
     } else if (record && event.kind === 'sample') {
       const direction = event.direction ?? 'download'
       if (direction === 'upload') {
@@ -106,14 +120,17 @@ export function parseRecord(text: string): TestRecord | null {
         )
       }
       record.totalBytes = record.downloadBytes + record.uploadBytes
-      const rates = sampleRates.get(event.sample.at) ?? { download: 0, upload: 0 }
-      rates[direction] = event.sample.bytesPerSec
-      sampleRates.set(event.sample.at, rates)
+      if (sampleRatesAt !== event.sample.at) {
+        sampleRatesAt = event.sample.at
+        sampleRates = { download: 0, upload: 0 }
+      }
+      sampleRates[direction] = event.sample.bytesPerSec
       record.peakBytesPerSec = Math.max(
         record.peakBytesPerSec,
-        rates.download + rates.upload
+        sampleRates.download + sampleRates.upload
       )
       latestEventAt = event.sample.at
+      trimCurveData(record, latestEventAt)
       if (Number.isFinite(event.activeDurationMs)) {
         record.activeDurationMs = event.activeDurationMs!
         hasActiveDuration = true
@@ -131,6 +148,7 @@ export function parseRecord(text: string): TestRecord | null {
           lastSegment.endBytes = record.totalBytes
         }
       }
+      trimCurveData(record, latestEventAt)
     } else if (record && event.kind === 'end') {
       record.endedAt = event.at
       record.stopReason = event.reason
@@ -150,6 +168,7 @@ export function parseRecord(text: string): TestRecord | null {
         hasActiveDuration = true
       }
       latestEventAt = event.at
+      trimCurveData(record, latestEventAt)
     }
   }
   if (!record) return null
@@ -165,6 +184,7 @@ export function parseRecord(text: string): TestRecord | null {
     lastSegment.endAt = record.endedAt
     lastSegment.endBytes = record.totalBytes
   }
+  trimCurveData(record, Math.max(latestEventAt, record.endedAt))
   const elapsedSec = Math.max(record.activeDurationMs / 1000, 0.001)
   record.averageBytesPerSec = record.totalBytes / elapsedSec
   record.downloadAverageBytesPerSec = record.downloadBytes / elapsedSec
@@ -195,6 +215,11 @@ export class RecordStore {
 
   append(id: string, event: Exclude<RecordEvent, { kind: 'start' }>): void {
     appendFileSync(this.path(id), JSON.stringify(event) + '\n', 'utf8')
+  }
+
+  save(record: TestRecord): void {
+    trimCurveData(record, Math.max(record.endedAt ?? 0, Date.now()))
+    writeFileSync(this.path(record.id), JSON.stringify({ kind: 'snapshot', record }) + '\n', 'utf8')
   }
 
   get(id: string): TestRecord | null {

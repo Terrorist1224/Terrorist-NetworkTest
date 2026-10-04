@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, Tray } from 'electron'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, unlinkSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import type {
   AppSnapshot,
@@ -18,6 +18,7 @@ import { SettingsStore } from './settings'
 import { SpeedEngine } from './speed-engine'
 import { resolveSpeedtestCnChannels } from './speedtest-cn'
 import { automaticChannelId } from '../shared/channel-selection'
+import { IpProbeService } from './ip-probe'
 
 const workspace = resolve(process.cwd())
 const dataDirectory = app.isPackaged
@@ -39,6 +40,11 @@ for (const directory of [
 ]) {
   mkdirSync(directory, { recursive: true })
 }
+try {
+  unlinkSync(join(dataDirectory, 'ipapi-risk-key.enc'))
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+}
 app.setPath('userData', dataDirectory)
 // Chromium and native temporary files stay beside app data instead of falling back to AppData.
 app.setPath('sessionData', sessionDataDirectory)
@@ -50,6 +56,7 @@ app.setAppUserModelId('com.terrorist.networktest')
 
 let engine: SpeedEngine
 let channelHealthMonitor: ChannelHealthMonitor
+let ipProbeService: IpProbeService
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let quitting = false
@@ -233,6 +240,7 @@ function registerIpc(): void {
     return snapshot
   })
   ipcMain.handle('speed:history', () => engine.history())
+  ipcMain.handle('ip-probe:lookup', () => ipProbeService.lookup())
   ipcMain.handle('window:minimize', () => mainWindow?.minimize())
   ipcMain.handle('window:close', () => mainWindow?.close())
 }
@@ -249,6 +257,7 @@ app.whenReady().then(() => {
     synchronizeAutomaticChannel(health)
     sendChannelHealth(health)
   })
+  ipProbeService = new IpProbeService()
   channelHealthMonitor.start()
   registerIpc()
   const iconPath = app.isPackaged

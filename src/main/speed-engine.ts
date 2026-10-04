@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { AUTO_THREAD_COUNT } from '../shared/types'
+import { trimCurveData } from '../shared/curve-window'
 import type {
   AppSnapshot,
   ChannelSelectionMode,
@@ -173,11 +174,8 @@ export class SpeedEngine {
     this.lastSampleMono = performance.now()
     this.lastSampleBytes = this.directionBytes()
     this.closeSegment(at)
-    this.records.append(this.record.id, {
-      kind: 'pause',
-      at,
-      activeDurationMs: this.activeDurationMs
-    })
+    trimCurveData(this.record, at)
+    this.records.save(this.record)
     this.emit()
     return this.snapshot()
   }
@@ -198,11 +196,6 @@ export class SpeedEngine {
     this.activeStartedMono = performance.now()
     this.lastSampleMono = this.activeStartedMono
     this.lastSampleBytes = this.directionBytes()
-    this.records.append(this.record.id, {
-      kind: 'resume',
-      at,
-      activeDurationMs: this.activeDurationMs
-    })
     this.addSegment(at)
     this.restartWorkers()
     this.startSampling()
@@ -230,16 +223,8 @@ export class SpeedEngine {
     this.record.error = error
     this.error = error ?? null
     this.updateAggregateMetrics()
-    this.records.append(this.record.id, {
-      kind: 'end',
-      at,
-      reason,
-      totalBytes: this.record.totalBytes,
-      downloadBytes: this.record.downloadBytes,
-      uploadBytes: this.record.uploadBytes,
-      activeDurationMs: this.activeDurationMs,
-      error
-    })
+    trimCurveData(this.record, at)
+    this.records.save(this.record)
     this.emit()
     return this.snapshot()
   }
@@ -428,7 +413,8 @@ export class SpeedEngine {
       startBytes: this.record.totalBytes
     }
     this.record.segments.push(segment)
-    this.records.append(this.record.id, { kind: 'segment', segment })
+    trimCurveData(this.record, at)
+    this.records.save(this.record)
   }
 
   private closeSegment(at: number): void {
@@ -603,18 +589,14 @@ export class SpeedEngine {
       } else {
         this.record.uploadPeakBytesPerSec = Math.max(this.record.uploadPeakBytesPerSec, bytesPerSec)
       }
-      this.records.append(this.record.id, {
-        kind: 'sample',
-        direction,
-        sample,
-        activeDurationMs
-      })
       this.lastSampleBytes[direction] = totalBytes
     }
 
     this.record.activeDurationMs = activeDurationMs
     this.record.peakBytesPerSec = Math.max(this.record.peakBytesPerSec, combinedBytesPerSec)
     this.updateAggregateMetrics()
+    trimCurveData(this.record, now)
+    this.records.save(this.record)
     this.lastSampleMono = nowMono
     this.emit()
   }

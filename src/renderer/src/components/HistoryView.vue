@@ -105,6 +105,8 @@ function modeLabel(record: TestRecord): string {
           :samples="selected.samples"
           :segments="selected.segments"
           :channels="snapshot.channels"
+          :started-at="selected.startedAt"
+          :window-end="selected.endedAt"
           :tested="selected.mode !== 'upload'"
         />
         <SpeedChart
@@ -112,6 +114,8 @@ function modeLabel(record: TestRecord): string {
           :samples="selected.uploadSamples"
           :segments="selected.segments"
           :channels="snapshot.channels"
+          :started-at="selected.startedAt"
+          :window-end="selected.endedAt"
           :tested="selected.mode !== 'download'"
         />
       </div>

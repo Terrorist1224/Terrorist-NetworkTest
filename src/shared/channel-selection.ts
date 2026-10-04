@@ -44,3 +44,10 @@ export function automaticChannelId(
     return undefined
   return bestDomesticChannel(snapshot.channels, healthMap, snapshot.settings.mode)?.id
 }
+
+export function automaticChannelLabel(snapshot: AppSnapshot, healthMap: ChannelHealthMap): string {
+  const current = snapshot.channels.find((channel) => channel.id === snapshot.settings.channelId)
+  if (snapshot.running || snapshot.paused) return current?.label ?? '等待可用节点'
+  const best = bestDomesticChannel(snapshot.channels, healthMap, snapshot.settings.mode)
+  return `自动（${best?.label ?? '等待可用节点'}）`
+}

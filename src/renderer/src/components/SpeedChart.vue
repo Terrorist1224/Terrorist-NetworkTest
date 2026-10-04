@@ -5,6 +5,7 @@ import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, MarkLineComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import type { Channel, SpeedSample, TestSegment } from '../../../shared/types'
+import { CURVE_WINDOW_MS, latestCurveTime } from '../../../shared/curve-window'
 import { threadLabel } from '../format'
 
 use([LineChart, GridComponent, TooltipComponent, MarkLineComponent, CanvasRenderer])
@@ -14,6 +15,8 @@ const props = defineProps<{
   samples: SpeedSample[]
   segments?: TestSegment[]
   channels?: Channel[]
+  startedAt?: number
+  windowEnd?: number
 }>()
 const target = ref<HTMLElement | null>(null)
 let chart: EChartsType | null = null
@@ -35,12 +38,23 @@ function render(): void {
       ? themeColor('--chart-line-secondary', '#9fa4a9')
       : themeColor('--chart-line', '#bec2c6')
   const chartMarker = themeColor('--chart-marker', '#c4c4c4')
-  const markers = (props.segments ?? []).slice(1).map((segment) => ({
-    xAxis: segment.at,
-    label: {
-      formatter: `${props.channels?.find((channel) => channel.id === segment.channelId)?.label ?? segment.channelId} · ${threadLabel(segment.threadCount)}`
-    }
-  }))
+  const latestKnownTime = latestCurveTime(props.samples, props.segments ?? [], props.windowEnd ?? 0)
+  const windowEnd = latestKnownTime || Date.now()
+  const windowStart = windowEnd - CURVE_WINDOW_MS
+  const samples = props.samples.filter(
+    (sample) => sample.at >= windowStart && sample.at <= windowEnd
+  )
+  const markers = (props.segments ?? [])
+    .filter(
+      (segment) =>
+        segment.at > (props.startedAt ?? 0) && segment.at >= windowStart && segment.at <= windowEnd
+    )
+    .map((segment) => ({
+      xAxis: segment.at,
+      label: {
+        formatter: `${props.channels?.find((channel) => channel.id === segment.channelId)?.label ?? segment.channelId} · ${threadLabel(segment.threadCount)}`
+      }
+    }))
   chart.setOption(
     {
       animation: false,
@@ -52,6 +66,9 @@ function render(): void {
       },
       xAxis: {
         type: 'time',
+        min: windowStart,
+        max: windowEnd,
+        splitNumber: 3,
         axisLine: { lineStyle: { color: lineStrong } },
         axisTick: { show: false },
         axisLabel: { color: textTertiary, fontSize: 11, hideOverlap: true },
@@ -69,13 +86,13 @@ function render(): void {
         {
           type: 'line',
           name: props.title,
-          showSymbol: props.samples.length <= 1,
+          showSymbol: samples.length <= 1,
           symbolSize: 7,
           smooth: false,
           lineStyle: { color: chartLine, width: 2 },
           itemStyle: { color: chartLine },
           areaStyle: { color: chartLine, opacity: 0.08 },
-          data: props.samples.map((sample) => [sample.at, sample.bytesPerSec / 1024 / 1024]),
+          data: samples.map((sample) => [sample.at, sample.bytesPerSec / 1024 / 1024]),
           markLine: {
             silent: true,
             symbol: 'none',
@@ -97,7 +114,7 @@ onMounted(() => {
   observer.observe(target.value)
   render()
 })
-watch(() => [props.samples, props.segments], render, { deep: true })
+watch(() => [props.samples, props.segments, props.windowEnd], render, { deep: true })
 onBeforeUnmount(() => {
   observer?.disconnect()
   chart?.dispose()

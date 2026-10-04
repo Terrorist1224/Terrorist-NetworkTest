@@ -4,6 +4,7 @@ import type {
   ChannelHealthMap,
   ChannelSelectionMode,
   DesktopApi,
+  IpProbeResult,
   Limits,
   TestMode,
   TestSettings
@@ -25,6 +26,7 @@ const api: DesktopApi = {
   addChannel: (label: string, url: string) => ipcRenderer.invoke('speed:add-channel', label, url),
   removeChannel: (id: string) => ipcRenderer.invoke('speed:remove-channel', id),
   history: () => ipcRenderer.invoke('speed:history'),
+  probeIp: (): Promise<IpProbeResult> => ipcRenderer.invoke('ip-probe:lookup'),
   minimizeMain: () => ipcRenderer.invoke('window:minimize'),
   closeMain: () => ipcRenderer.invoke('window:close'),
   onSnapshot: (callback: (snapshot: AppSnapshot) => void) => {

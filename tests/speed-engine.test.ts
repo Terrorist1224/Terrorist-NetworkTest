@@ -251,6 +251,43 @@ describe('speed engine with a local download service', () => {
     expect(records.get(result.id)?.stopReason).toBe('manual')
   })
 
+  it('keeps both curve directions and full totals across a pause and resume', async () => {
+    const local = await localDuplexServer()
+    const { engine, channels, records } = createEngine()
+    const channel = await channels.add('Local duplex', `${local.url}/down`, async () => {})
+    channel.uploadUrl = `${local.url}/up`
+    await engine.start({
+      mode: 'parallel',
+      channelId: channel.id,
+      threadCount: 1,
+      maxDurationSec: 0,
+      maxBytes: 1024 ** 3
+    })
+    await waitUntil(() => {
+      const record = engine.snapshot().record
+      return Boolean(record?.downloadBytes && record.uploadBytes)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 1100))
+
+    const paused = engine.pause().record!
+    expect(paused.samples.length).toBeGreaterThan(0)
+    expect(paused.uploadSamples.length).toBeGreaterThan(0)
+    const pausedTotal = paused.totalBytes
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    engine.resume()
+    await new Promise((resolve) => setTimeout(resolve, 1100))
+
+    const finished = engine.stop('manual').record!
+    const restored = records.get(finished.id)!
+    expect(finished.totalBytes).toBeGreaterThan(pausedTotal)
+    expect(finished.samples.length).toBeGreaterThan(0)
+    expect(finished.uploadSamples.length).toBeGreaterThan(0)
+    expect(restored.totalBytes).toBe(finished.totalBytes)
+    expect(restored.activeDurationMs).toBe(finished.activeDurationMs)
+    expect(restored.samples.at(-1)?.at).toBeGreaterThan(paused.samples.at(-1)!.at)
+    expect(restored.uploadSamples.at(-1)?.at).toBeGreaterThan(paused.uploadSamples.at(-1)!.at)
+  })
+
   it('stops at the traffic limit', async () => {
     const url = await localServer()
     const { engine, channels } = createEngine()

@@ -1,6 +1,6 @@
 #define ProductName "Terrorist NetworkTest"
 #define InstallFolderName "TerroristNetWorkTest"
-#define ProductVersion "1.1.0"
+#define ProductVersion "1.2.0"
 #define ProductGuid "dfea1301-fb94-51e1-a8c2-b661e54f3b53"
 
 [Setup]
@@ -27,7 +27,7 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 OutputDir=..\release
 OutputBaseFilename=Terrorist NetworkTest {#ProductVersion}
-VersionInfoVersion=1.1.0.0
+VersionInfoVersion=1.2.0.0
 VersionInfoProductName={#ProductName}
 VersionInfoProductVersion={#ProductVersion}
 CloseApplications=yes

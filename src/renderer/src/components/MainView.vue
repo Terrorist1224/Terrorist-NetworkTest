@@ -8,7 +8,11 @@ import type {
   StopMode,
   TestMode
 } from '../../../shared/types'
-import { bestDomesticChannel, isEligibleChannel } from '../../../shared/channel-selection'
+import {
+  automaticChannelLabel,
+  bestDomesticChannel,
+  isEligibleChannel
+} from '../../../shared/channel-selection'
 import { bytes, duration, mbps, speed, speedForDisplay, threadLabel } from '../format'
 import SelectDropdown from './SelectDropdown.vue'
 import SpeedChart from './SpeedChart.vue'
@@ -60,15 +64,32 @@ const bestAutoChannel = computed(() =>
 )
 const autoChannelOption = computed(() => {
   const best = bestAutoChannel.value
-  const health = best ? props.channelHealth[best.id] : undefined
+  const active = props.snapshot.running || props.snapshot.paused
+  const current = props.snapshot.channels.find(
+    (channel) => channel.id === props.snapshot.settings.channelId
+  )
+  const displayedChannel = active ? current : best
+  const health = displayedChannel ? props.channelHealth[displayedChannel.id] : undefined
   const status = health?.status
   return {
-    label: '自动（最低延迟）',
+    label: automaticChannelLabel(props.snapshot, props.channelHealth),
     value: 'auto',
     group: '自动选择',
     healthStatus: (status ?? 'checking') as ChannelHealthStatus,
-    healthText: health?.latencyMs == null ? '检测中' : `${health.latencyMs} ms`,
-    healthDescription: best ? `当前最优：${best.label}` : '等待符合条件的国内节点'
+    healthText: active
+      ? props.snapshot.running
+        ? '测速中'
+        : '已暂停'
+      : health?.latencyMs == null
+        ? best
+          ? '检测中'
+          : '等待节点'
+        : `${health.latencyMs} ms`,
+    healthDescription: active
+      ? `本次实际使用：${current?.label ?? '等待可用节点'}`
+      : best
+        ? `当前自动选择：${best.label}`
+        : '等待符合条件的国内节点'
   }
 })
 const selectedChannelValue = computed(() =>
@@ -174,6 +195,7 @@ watch(
 
 const record = computed(() => props.snapshot.record)
 const recordMode = computed(() => record.value?.mode ?? mode.value)
+const curveWindowEnd = computed(() => (props.snapshot.running ? Date.now() : record.value?.endedAt))
 function testModeForRecord(direction: 'download' | 'upload'): boolean {
   if (!record.value) return false
   return direction === 'download'
@@ -213,9 +235,7 @@ function directionMetrics(direction: 'download' | 'upload', title: string) {
   const bytesPerSec =
     direction === 'download' ? displayDownloadSpeed.value : displayUploadSpeed.value
   const trafficBytes =
-    direction === 'download'
-      ? (record.value?.downloadBytes ?? 0)
-      : (record.value?.uploadBytes ?? 0)
+    direction === 'download' ? (record.value?.downloadBytes ?? 0) : (record.value?.uploadBytes ?? 0)
   return [
     { label: `${title}速度`, value: tested ? speed(bytesPerSec) : '—' },
     { label: `${title}带宽`, value: tested ? mbps(bytesPerSec) : '—' },
@@ -232,12 +252,16 @@ const metricGroups = computed(() => [
       {
         label: '合计速度',
         value:
-          testModeForRecord('download') || testModeForRecord('upload') ? speed(totalSpeed.value) : '—'
+          testModeForRecord('download') || testModeForRecord('upload')
+            ? speed(totalSpeed.value)
+            : '—'
       },
       {
         label: '合计带宽',
         value:
-          testModeForRecord('download') || testModeForRecord('upload') ? mbps(totalSpeed.value) : '—'
+          testModeForRecord('download') || testModeForRecord('upload')
+            ? mbps(totalSpeed.value)
+            : '—'
       },
       { label: '合计流量', value: record.value ? bytes(record.value.totalBytes) : '—' }
     ]
@@ -393,7 +417,6 @@ function removeCurrent(): void {
   if (!props.snapshot.channels.find((channel) => channel.id === channelId.value)?.custom) return
   void perform(() => window.networkTest.removeChannel(channelId.value))
 }
-
 </script>
 
 <template>
@@ -456,6 +479,8 @@ function removeCurrent(): void {
             :samples="record?.samples ?? []"
             :segments="record?.segments ?? []"
             :channels="snapshot.channels"
+            :started-at="record?.startedAt"
+            :window-end="curveWindowEnd"
             :tested="testModeForRecord('download')"
           />
         </div>
@@ -473,6 +498,8 @@ function removeCurrent(): void {
             :samples="record?.uploadSamples ?? []"
             :segments="record?.segments ?? []"
             :channels="snapshot.channels"
+            :started-at="record?.startedAt"
+            :window-end="curveWindowEnd"
             :tested="testModeForRecord('upload')"
           />
         </div>

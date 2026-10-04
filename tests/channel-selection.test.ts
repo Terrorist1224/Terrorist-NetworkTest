@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AppSnapshot, Channel, ChannelHealthMap } from '../src/shared/types'
 import {
+  automaticChannelLabel,
   automaticChannelId,
   bestDomesticChannel,
   isEligibleChannel
@@ -115,5 +116,18 @@ describe('channel selection', () => {
     expect(
       automaticChannelId(snapshot([candidate.channel], 'manual'), candidate.health)
     ).toBeUndefined()
+  })
+
+  it('shows the automatically selected node while idle and the actual node while active', () => {
+    const current = channel('current-node', 'domestic', 25)
+    const candidate = channel('best-node', 'domestic', 10)
+    const state = snapshot([current.channel, candidate.channel])
+    const health = { ...current.health, ...candidate.health }
+
+    expect(automaticChannelLabel(state, health)).toBe('自动（best-node）')
+    expect(automaticChannelLabel({ ...state, running: true }, health)).toBe('current-node')
+    expect(automaticChannelLabel({ ...state, paused: true }, health)).toBe('current-node')
+    expect(automaticChannelLabel(snapshot([]), {})).toBe('自动（等待可用节点）')
+    expect(automaticChannelLabel({ ...snapshot([]), paused: true }, {})).toBe('等待可用节点')
   })
 })

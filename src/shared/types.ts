@@ -75,6 +75,26 @@ export interface TestRecord {
   error?: string
 }
 
+export interface IpGeoInfo {
+  ip: string
+  country: string | null
+  countryCode: string | null
+  region: string | null
+  city: string | null
+  continent: string | null
+  asn: number | string | null
+  organization: string | null
+  latitude: number | null
+  longitude: number | null
+  timezone: string | null
+  accuracyKm: number | null
+}
+
+export interface IpProbeResult {
+  geo: IpGeoInfo
+  geoQueriedAt: number
+}
+
 export interface AppSnapshot {
   running: boolean
   paused: boolean
@@ -108,6 +128,7 @@ export interface DesktopApi {
   addChannel(label: string, url: string): Promise<AppSnapshot>
   removeChannel(id: string): Promise<AppSnapshot>
   history(): Promise<TestRecord[]>
+  probeIp(): Promise<IpProbeResult>
   minimizeMain(): Promise<void>
   closeMain(): Promise<void>
   onSnapshot(callback: (snapshot: AppSnapshot) => void): () => void

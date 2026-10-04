@@ -4,10 +4,12 @@ import type { AppSnapshot, ChannelHealthMap } from '../../shared/types'
 import { APP_VERSION } from '../../shared/version'
 import MainView from './components/MainView.vue'
 import HistoryView from './components/HistoryView.vue'
+import IpProbeView from './components/IpProbeView.vue'
 
 const snapshot = ref<AppSnapshot | null>(null)
 const channelHealth = ref<ChannelHealthMap>({})
-const tab = ref<'live' | 'history'>('live')
+const tab = ref<'live' | 'history' | 'ip'>('live')
+const ipProbeActivation = ref(0)
 type NoticeLevel = 'error' | 'warning'
 const notice = ref<{ message: string; level: NoticeLevel } | null>(null)
 const dismissedSnapshotError = ref<string | null>(null)
@@ -54,6 +56,10 @@ function minimizeWindow(): void {
 function closeWindow(): void {
   void window.networkTest.closeMain()
 }
+function openIpProbe(): void {
+  ipProbeActivation.value++
+  tab.value = 'ip'
+}
 function showError(message: string): void {
   dismissedSnapshotError.value = null
   notice.value = { message, level: 'error' }
@@ -86,6 +92,9 @@ function dismissNotice(): void {
           >
             <span aria-hidden="true">⌁</span>历史记录
           </button>
+          <button class="nav-item" :class="{ selected: tab === 'ip' }" @click="openIpProbe">
+            <span aria-hidden="true">⌖</span>IP 探测
+          </button>
         </nav>
         <div class="window-controls">
           <button class="window-control" aria-label="最小化" title="最小化" @click="minimizeWindow">
@@ -102,9 +111,7 @@ function dismissNotice(): void {
         </div>
       </header>
       <main class="content">
-        <div v-if="!snapshot" class="loading">
-          正在连接测速引擎…
-        </div>
+        <div v-if="!snapshot" class="loading">正在连接测速引擎…</div>
         <template v-else>
           <MainView
             v-if="tab === 'live'"
@@ -113,7 +120,8 @@ function dismissNotice(): void {
             @error="showError"
             @warning="showWarning"
           />
-          <HistoryView v-else :snapshot="snapshot" />
+          <HistoryView v-else-if="tab === 'history'" :snapshot="snapshot" />
+          <IpProbeView v-else :key="ipProbeActivation" />
         </template>
         <button
           v-if="notice"
