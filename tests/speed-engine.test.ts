@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http'
 import { mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { ChannelStore } from '../src/main/channels'
+import { ChannelStore, downloadUrlForChannel } from '../src/main/channels'
 import { RecordStore, parseRecord } from '../src/main/record-store'
 import { SettingsStore } from '../src/main/settings'
 import { SpeedEngine } from '../src/main/speed-engine'
@@ -44,6 +44,43 @@ async function localServer(): Promise<string> {
   return `http://127.0.0.1:${address.port}`
 }
 
+async function localDuplexServer(): Promise<{
+  url: string
+  uploads: () => { requests: number; bytes: number }
+  downloads: () => string[]
+}> {
+  let requests = 0
+  let uploadedBytes = 0
+  const downloadUrls: string[] = []
+  const server = createServer((request, response) => {
+    if (request.method === 'POST') {
+      let requestBytes = 0
+      request.on('data', (chunk: Buffer) => (requestBytes += chunk.byteLength))
+      request.on('end', () => {
+        requests++
+        uploadedBytes += requestBytes
+        response.writeHead(204).end()
+      })
+      return
+    }
+    downloadUrls.push(request.url ?? '')
+    response.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': 2 * 1024 * 1024
+    })
+    response.end(Buffer.alloc(2 * 1024 * 1024, 9))
+  })
+  servers.push(server)
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('No local port')
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    uploads: () => ({ requests, bytes: uploadedBytes }),
+    downloads: () => [...downloadUrls]
+  }
+}
+
 function createEngine() {
   const directory = resolve('.tmp', 'test-data', randomUUID())
   mkdirSync(directory, { recursive: true })
@@ -52,6 +89,128 @@ function createEngine() {
   const settings = new SettingsStore(directory)
   return { engine: new SpeedEngine(channels, records, settings), channels, records }
 }
+
+describe('managed speed-test provider channels', () => {
+  it('stores only domestic provider nodes and keeps built-in fallback domestic', () => {
+    const { channels } = createEngine()
+    const domestic = {
+      id: 'speedtest-cn:domestic',
+      label: '国内节点',
+      url: 'https://domestic.example.test/download',
+      uploadUrl: 'https://domestic.example.test/upload',
+      region: 'domestic' as const,
+      provider: 'speedtest-cn' as const
+    }
+    const global = {
+      ...domestic,
+      id: 'speedtest-cn:global',
+      label: '全球节点',
+      region: 'global' as const
+    }
+
+    channels.replaceProviderChannels([domestic, global])
+
+    expect(channels.list().map((channel) => channel.id)).toContain(domestic.id)
+    expect(channels.list().map((channel) => channel.id)).not.toContain(global.id)
+    expect(channels.list().every((channel) => channel.region !== 'global')).toBe(true)
+  })
+
+  it('migrates the old automatic Speedtest.cn selection to the first regional candidate', () => {
+    const directory = resolve('.tmp', 'test-data', randomUUID())
+    mkdirSync(directory, { recursive: true })
+    const channels = new ChannelStore(directory)
+    const records = new RecordStore(directory)
+    const settings = new SettingsStore(directory)
+    settings.save({
+      mode: 'download',
+      channelId: 'speedtest-cn',
+      threadCount: 8,
+      maxDurationSec: 0,
+      maxBytes: 0
+    })
+    const engine = new SpeedEngine(channels, records, settings)
+    const candidate = {
+      id: 'speedtest-cn:433865',
+      label: '测速网 · 湖南 · 长沙 · 移动 #433865',
+      url: 'https://node-433865.speedtest.cn/download',
+      uploadUrl: 'https://node-433865.speedtest.cn/upload',
+      websocketUrl: 'wss://node-433865.speedtest.cn/ws',
+      region: 'domestic' as const,
+      provider: 'speedtest-cn' as const
+    }
+
+    expect(engine.replaceProviderChannels([candidate])).toBe(true)
+    expect(engine.snapshot().settings.channelId).toBe(candidate.id)
+  })
+
+  it('falls back to a built-in channel when the selected provider node loses upload support', () => {
+    const { engine, channels } = createEngine()
+    const provider = {
+      id: 'speedtest-cn:301',
+      label: '测速网 · 浙江 · 杭州 · 联通 #301',
+      url: 'https://example.test/download',
+      uploadUrl: 'https://example.test/upload',
+      websocketUrl: 'wss://node-1.speedtest.cn:51090/ws',
+      region: 'domestic' as const,
+      provider: 'speedtest-cn' as const,
+      operator: '联通'
+    }
+    channels.replaceProviderChannels([provider])
+    engine.changeChannel(provider.id)
+    engine.changeMode('upload')
+
+    const refreshed = { ...provider, uploadUrl: undefined }
+    expect(engine.replaceProviderChannels([refreshed])).toBe(true)
+    expect(engine.snapshot().settings).toMatchObject({ mode: 'upload', channelId: 'mcloud' })
+    expect(engine.snapshot().channels.some((channel) => channel.id === provider.id)).toBe(true)
+  })
+
+  it('adds the Speedtest.cn size and cache-busting parameters only to provider downloads', () => {
+    const provider = {
+      id: 'speedtest-cn:301',
+      label: '测速网 · 杭州 · 联通 #301',
+      url: 'https://node-1.speedtest.cn:51090/download?existing=value',
+      region: 'domestic' as const,
+      provider: 'speedtest-cn' as const
+    }
+    const built = new URL(downloadUrlForChannel(provider, 1234))
+    expect(built.searchParams.get('size')).toBe('1048576')
+    expect(built.searchParams.get('r')).toBe('1234')
+    expect(built.searchParams.get('existing')).toBe('value')
+
+    const ordinary = { ...provider, provider: undefined }
+    expect(downloadUrlForChannel(ordinary, 1234)).toBe(ordinary.url)
+  })
+
+  it('uses the provider download parameters during both the preflight and the test', async () => {
+    const local = await localDuplexServer()
+    const { engine, channels } = createEngine()
+    const provider = {
+      id: 'speedtest-cn:301',
+      label: '测速网 · 杭州 · 联通 #301',
+      url: `${local.url}/download`,
+      uploadUrl: `${local.url}/upload`,
+      websocketUrl: 'ws://node-1.speedtest.cn:51090/ws',
+      region: 'domestic' as const,
+      provider: 'speedtest-cn' as const
+    }
+    channels.replaceProviderChannels([provider])
+    await engine.start({
+      mode: 'download',
+      channelId: provider.id,
+      threadCount: 1,
+      maxDurationSec: 10,
+      maxBytes: 1024 ** 3
+    })
+    await waitUntil(() => (engine.snapshot().record?.downloadBytes ?? 0) > 0)
+    engine.stop()
+
+    expect(local.downloads().length).toBeGreaterThanOrEqual(2)
+    for (const path of local.downloads()) {
+      expect(path).toMatch(/^\/download\?size=1048576&r=\d+$/)
+    }
+  })
+})
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
   const start = Date.now()
@@ -68,6 +227,7 @@ describe('speed engine with a local download service', () => {
     const first = await channels.add('Local A', `${url}/a`, async () => {})
     const second = await channels.add('Local B', `${url}/b`, async () => {})
     await engine.start({
+      mode: 'download',
       channelId: first.id,
       threadCount: 2,
       maxDurationSec: 10,
@@ -96,6 +256,7 @@ describe('speed engine with a local download service', () => {
     const { engine, channels } = createEngine()
     const channel = await channels.add('Local', url, async () => {})
     await engine.start({
+      mode: 'download',
       channelId: channel.id,
       threadCount: 2,
       maxDurationSec: 10,
@@ -106,11 +267,74 @@ describe('speed engine with a local download service', () => {
     expect(engine.snapshot().record?.totalBytes).toBeGreaterThanOrEqual(1024 * 1024)
   })
 
+  it('measures completed upload requests and enforces the upload traffic limit', async () => {
+    const local = await localDuplexServer()
+    const { engine, channels, records } = createEngine()
+    const channel = await channels.add('Local duplex', `${local.url}/down`, async () => {})
+    channel.uploadUrl = `${local.url}/up`
+    await engine.start({
+      mode: 'upload',
+      channelId: channel.id,
+      threadCount: 32,
+      maxDurationSec: 0,
+      maxBytes: 1024 * 1024
+    })
+    await waitUntil(() => !engine.snapshot().running)
+    const record = engine.snapshot().record!
+    expect(local.uploads().requests).toBeGreaterThan(0)
+    expect(local.uploads().bytes).toBe(1024 * 1024)
+    expect(record.stopReason).toBe('traffic-limit')
+    expect(record.downloadBytes).toBe(0)
+    expect(record.uploadBytes).toBeGreaterThanOrEqual(1024 * 1024)
+    expect(records.get(record.id)?.mode).toBe('upload')
+  })
+
+  it('keeps the recorded average speed accurate when pausing', async () => {
+    const local = await localDuplexServer()
+    const { engine, channels } = createEngine()
+    const channel = await channels.add('Local duplex', `${local.url}/down`, async () => {})
+    channel.uploadUrl = `${local.url}/up`
+    await engine.start({
+      mode: 'upload',
+      channelId: channel.id,
+      threadCount: 1,
+      maxDurationSec: 0,
+      maxBytes: 1024 ** 3
+    })
+    await waitUntil(() => (engine.snapshot().record?.uploadBytes ?? 0) > 0)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+
+    const record = engine.pause().record!
+    const expectedAverage = record.uploadBytes / (record.activeDurationMs / 1000)
+    expect(record.uploadAverageBytesPerSec).toBeCloseTo(expectedAverage, 0)
+  })
+
+  it('keeps separate traffic quotas in parallel mode', async () => {
+    const local = await localDuplexServer()
+    const { engine, channels } = createEngine()
+    const channel = await channels.add('Local duplex', `${local.url}/down`, async () => {})
+    channel.uploadUrl = `${local.url}/up`
+    await engine.start({
+      mode: 'parallel',
+      channelId: channel.id,
+      threadCount: 1,
+      maxDurationSec: 10,
+      maxBytes: 1024 * 1024
+    })
+    await waitUntil(() => !engine.snapshot().running)
+    const record = engine.snapshot().record!
+    expect(record.stopReason).toBe('traffic-limit')
+    expect(record.downloadBytes).toBeGreaterThanOrEqual(1024 * 1024)
+    expect(record.uploadBytes).toBeGreaterThanOrEqual(1024 * 1024)
+    expect(record.totalBytes).toBe(record.downloadBytes + record.uploadBytes)
+  })
+
   it('stops at the time limit', async () => {
     const url = await localServer()
     const { engine, channels } = createEngine()
     const channel = await channels.add('Local', url, async () => {})
     await engine.start({
+      mode: 'download',
       channelId: channel.id,
       threadCount: 1,
       maxDurationSec: 1,
@@ -136,6 +360,7 @@ describe('speed engine with a local download service', () => {
       async () => {}
     )
     await engine.start({
+      mode: 'download',
       channelId: channel.id,
       threadCount: 1,
       maxDurationSec: 10,
@@ -166,4 +391,6 @@ it('recovers a record without an end event as interrupted', () => {
   expect(record?.stopReason).toBe('interrupted')
   expect(record?.endedAt).toBe(2000)
   expect(record?.totalBytes).toBe(2048)
+  expect(record?.mode).toBe('download')
+  expect(record?.uploadBytes).toBe(0)
 })

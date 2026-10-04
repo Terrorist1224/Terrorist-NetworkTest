@@ -9,6 +9,8 @@ import { threadLabel } from '../format'
 
 use([LineChart, GridComponent, TooltipComponent, MarkLineComponent, CanvasRenderer])
 const props = defineProps<{
+  title: string
+  tested: boolean
   samples: SpeedSample[]
   segments?: TestSegment[]
   channels?: Channel[]
@@ -17,8 +19,22 @@ const target = ref<HTMLElement | null>(null)
 let chart: EChartsType | null = null
 let observer: ResizeObserver | null = null
 
+function themeColor(name: string, fallback: string): string {
+  return target.value
+    ? getComputedStyle(target.value).getPropertyValue(name).trim() || fallback
+    : fallback
+}
+
 function render(): void {
   if (!chart) return
+  const textTertiary = themeColor('--text-tertiary', '#838a91')
+  const line = themeColor('--line', '#3b4046')
+  const lineStrong = themeColor('--line-strong', '#50565d')
+  const chartLine =
+    props.title === '上行速度'
+      ? themeColor('--chart-line-secondary', '#9fa4a9')
+      : themeColor('--chart-line', '#bec2c6')
+  const chartMarker = themeColor('--chart-marker', '#c4c4c4')
   const markers = (props.segments ?? []).slice(1).map((segment) => ({
     xAxis: segment.at,
     label: {
@@ -36,9 +52,9 @@ function render(): void {
       },
       xAxis: {
         type: 'time',
-        axisLine: { lineStyle: { color: '#526a66' } },
+        axisLine: { lineStyle: { color: lineStrong } },
         axisTick: { show: false },
-        axisLabel: { color: '#829d98', fontSize: 11 },
+        axisLabel: { color: textTertiary, fontSize: 11, hideOverlap: true },
         splitLine: { show: false }
       },
       yAxis: {
@@ -46,27 +62,25 @@ function render(): void {
         min: 0,
         axisLine: { show: false },
         axisTick: { show: false },
-        axisLabel: { color: '#829d98', fontSize: 11, formatter: '{value}' },
-        splitLine: { lineStyle: { color: '#ffffff14' } },
-        name: 'MB/s',
-        nameTextStyle: { color: '#829d98' }
+        axisLabel: { color: textTertiary, fontSize: 11, formatter: '{value}' },
+        splitLine: { lineStyle: { color: line } }
       },
       series: [
         {
           type: 'line',
-          name: '下载速度',
+          name: props.title,
           showSymbol: props.samples.length <= 1,
           symbolSize: 7,
           smooth: false,
-          lineStyle: { color: '#a9edcf', width: 2 },
-          itemStyle: { color: '#a9edcf' },
-          areaStyle: { color: '#a9edcf', opacity: 0.1 },
+          lineStyle: { color: chartLine, width: 2 },
+          itemStyle: { color: chartLine },
+          areaStyle: { color: chartLine, opacity: 0.08 },
           data: props.samples.map((sample) => [sample.at, sample.bytesPerSec / 1024 / 1024]),
           markLine: {
             silent: true,
             symbol: 'none',
-            lineStyle: { color: '#e9bd82', type: 'dashed' },
-            label: { color: '#e9bd82', fontSize: 10 },
+            lineStyle: { color: chartMarker, type: 'dashed' },
+            label: { color: chartMarker, fontSize: 10 },
             data: markers
           }
         }
@@ -92,13 +106,33 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="target" class="speed-chart" role="img" aria-label="每秒下载速度折线图" />
+  <div class="speed-chart-wrap">
+    <div ref="target" class="speed-chart" role="img" :aria-label="`每秒${title}折线图`" />
+    <div v-if="!samples.length" class="speed-chart-empty">
+      {{ tested ? '等待数据' : '本次未测试' }}
+    </div>
+  </div>
 </template>
 
 <style scoped>
+.speed-chart-wrap {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
 .speed-chart {
   width: 100%;
   height: 100%;
-  min-height: 180px;
+  min-height: 0;
+}
+.speed-chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  pointer-events: none;
 }
 </style>

@@ -1,6 +1,6 @@
 {
   "name": "terrorist-networktest",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "license": "MIT",
   "author": "Terrorist NetworkTest contributors",
   "description": "Windows download speed test client with pause, history, and tray support",
@@ -58,7 +58,9 @@
       "target": [
         {
           "target": "dir",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     }

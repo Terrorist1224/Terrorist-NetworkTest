@@ -11,40 +11,20 @@ export const builtInChannels: Channel[] = [
     label: '和彩云',
     region: 'domestic',
     url: 'https://img.mcloud.139.com/material_prod/material_media/20221128/1669626861087.png'
-  },
-  {
-    id: 'cloudflare',
-    label: 'Cloudflare Speed',
-    region: 'global',
-    url: 'https://speed.cloudflare.com/__down?bytes=99614720'
-  },
-  {
-    id: 'cachefly',
-    label: 'Cachefly',
-    region: 'global',
-    url: 'https://web1.cachefly.net/speedtest/downloading'
-  },
-  {
-    id: 'steam-akamai',
-    label: 'Steam Akamai',
-    region: 'global',
-    url: 'https://cdn.akamai.steamstatic.com/steam/apps/1063730/extras/NW_Sword_Sorcery_2.gif'
-  },
-  {
-    id: 'steam-cloudflare',
-    label: 'Steam Cloudflare',
-    region: 'global',
-    url: 'https://cdn.cloudflare.steamstatic.com/steam/apps/1063730/extras/NW_Sword_Sorcery_2.gif'
   }
 ]
+
+export const DEFAULT_CHANNEL_ID = 'mcloud'
 
 export class ChannelStore {
   private readonly path: string
   private custom: Channel[] = []
+  private provider: Channel[]
 
-  constructor(dataDirectory: string) {
+  constructor(dataDirectory: string, provider: Channel[] = []) {
     mkdirSync(dataDirectory, { recursive: true })
     this.path = join(dataDirectory, 'channels.json')
+    this.provider = provider
     if (existsSync(this.path)) {
       try {
         const parsed: unknown = JSON.parse(readFileSync(this.path, 'utf8'))
@@ -64,7 +44,15 @@ export class ChannelStore {
   }
 
   list(): Channel[] {
-    return [...builtInChannels, ...this.custom]
+    return [...builtInChannels, ...this.provider, ...this.custom].filter(
+      (channel) => channel.region !== 'global'
+    )
+  }
+
+  replaceProviderChannels(channels: Channel[]): void {
+    this.provider = channels.filter(
+      (channel) => channel.provider === 'speedtest-cn' && channel.region === 'domestic'
+    )
   }
   get(id: string): Channel | undefined {
     return this.list().find((channel) => channel.id === id)
@@ -102,6 +90,14 @@ export class ChannelStore {
   private save(): void {
     writeFileSync(this.path, JSON.stringify(this.custom, null, 2), 'utf8')
   }
+}
+
+export function downloadUrlForChannel(channel: Channel, now = Date.now()): string {
+  if (channel.provider !== 'speedtest-cn') return channel.url
+  const url = new URL(channel.url)
+  url.searchParams.set('size', '1048576')
+  url.searchParams.set('r', String(now))
+  return url.toString()
 }
 
 export async function probeDownload(url: string, fetcher: typeof fetch = fetch): Promise<void> {

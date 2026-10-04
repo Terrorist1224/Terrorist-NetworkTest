@@ -4,7 +4,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $innoCompiler = Join-Path $env:ProgramFiles 'Inno Setup 7\ISIDE.exe'
 $installerScript = Join-Path $projectRoot 'installer\setup.iss'
 $appPayload = Join-Path $projectRoot 'release\win-unpacked\TerroristNetWorkTest.exe'
-$installerOutput = Join-Path $projectRoot 'release\Terrorist NetworkTest 1.0.0.exe'
+$installerOutput = Join-Path $projectRoot 'release\Terrorist NetworkTest 1.1.0.exe'
 $tempRoot = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetTempPath())
 $compileTimeoutMs = 15 * 60 * 1000
 
@@ -41,6 +41,14 @@ if (-not (Test-Path -LiteralPath $installerOutput -PathType Leaf)) {
   throw "Inno Setup did not produce the expected installer: $installerOutput"
 }
 
-$installerHash = (Get-FileHash -LiteralPath $installerOutput -Algorithm SHA256).Hash
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+$installerStream = [System.IO.File]::OpenRead($installerOutput)
+try {
+  $hashBytes = $sha256.ComputeHash($installerStream)
+  $installerHash = [System.BitConverter]::ToString($hashBytes).Replace('-', '')
+} finally {
+  $installerStream.Dispose()
+  $sha256.Dispose()
+}
 Write-Output "Installer: $installerOutput"
 Write-Output "SHA256: $installerHash"

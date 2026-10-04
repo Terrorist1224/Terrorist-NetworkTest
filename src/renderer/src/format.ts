@@ -16,6 +16,15 @@ export function speed(value: number): string {
   return `${(value / 1024 / 1024).toFixed(1)} MB/s`
 }
 
+export function speedForDisplay(
+  latestSampleBytesPerSec: number,
+  averageBytesPerSec: number,
+  running: boolean,
+  paused: boolean
+): number {
+  return running || paused ? latestSampleBytesPerSec : averageBytesPerSec
+}
+
 export function mbps(value: number): string {
   return `${((value * 8) / 1_000_000).toFixed(1)} Mbps`
 }

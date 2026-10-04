@@ -29,6 +29,10 @@ function reason(record: TestRecord): string {
   }
   return record.stopReason ? map[record.stopReason] : '运行中'
 }
+
+function modeLabel(record: TestRecord): string {
+  return record.mode === 'upload' ? '上行' : record.mode === 'parallel' ? '并行' : '下行'
+}
 </script>
 
 <template>
@@ -45,14 +49,17 @@ function reason(record: TestRecord): string {
         @click="selected = item"
       >
         <span>{{ clockTime(item.startedAt) }}</span
-        ><strong>{{ speed(item.averageBytesPerSec) }}</strong
+        ><strong>{{ modeLabel(item) }}</strong
+        ><small
+          >下行 {{ speed(item.downloadAverageBytesPerSec) }} · 上行
+          {{ speed(item.uploadAverageBytesPerSec) }}</small
         ><small>{{ reason(item) }} · {{ bytes(item.totalBytes) }}</small>
       </button>
     </section>
     <section v-if="selected" class="history-detail">
       <div class="detail-top">
         <div>
-          <h2>{{ clockTime(selected.startedAt) }}</h2>
+          <h2>{{ clockTime(selected.startedAt) }} · {{ modeLabel(selected) }}</h2>
         </div>
         <span class="detail-status">{{ reason(selected) }}</span>
       </div>
@@ -68,20 +75,44 @@ function reason(record: TestRecord): string {
           <label>总流量</label><strong>{{ bytes(selected.totalBytes) }}</strong>
         </div>
         <div>
-          <label>平均速度</label><strong>{{ speed(selected.averageBytesPerSec) }}</strong>
+          <label>下行总量</label><strong>{{ bytes(selected.downloadBytes) }}</strong>
         </div>
         <div>
-          <label>平均吞吐</label><strong>{{ mbps(selected.averageBytesPerSec) }}</strong>
+          <label>上行总量</label><strong>{{ bytes(selected.uploadBytes) }}</strong>
         </div>
         <div>
-          <label>峰值速度</label><strong>{{ speed(selected.peakBytesPerSec) }}</strong>
+          <label>下行平均 / 峰值</label
+          ><strong
+            >{{ speed(selected.downloadAverageBytesPerSec) }} /
+            {{ speed(selected.downloadPeakBytesPerSec) }}</strong
+          >
+        </div>
+        <div>
+          <label>上行平均 / 峰值</label
+          ><strong
+            >{{ speed(selected.uploadAverageBytesPerSec) }} /
+            {{ speed(selected.uploadPeakBytesPerSec) }}</strong
+          >
+        </div>
+        <div>
+          <label>平均吞吐（上下行合计）</label
+          ><strong>{{ mbps(selected.averageBytesPerSec) }}</strong>
         </div>
       </div>
       <div class="detail-chart">
         <SpeedChart
+          title="下行速度"
           :samples="selected.samples"
           :segments="selected.segments"
           :channels="snapshot.channels"
+          :tested="selected.mode !== 'upload'"
+        />
+        <SpeedChart
+          title="上行速度"
+          :samples="selected.uploadSamples"
+          :segments="selected.segments"
+          :channels="snapshot.channels"
+          :tested="selected.mode !== 'download'"
         />
       </div>
       <h3>配置分段</h3>
@@ -103,14 +134,24 @@ function reason(record: TestRecord): string {
 <style scoped>
 .history-layout {
   height: 100%;
+  min-height: 0;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   grid-template-columns: 310px 1fr;
   gap: 34px;
 }
 .history-list {
-  border-right: 1px solid #ffffff1c;
-  padding-right: 24px;
+  min-height: 0;
+  padding: 18px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
   overflow: auto;
+  scrollbar-width: none;
+}
+.history-list::-webkit-scrollbar,
+.history-detail::-webkit-scrollbar {
+  display: none;
 }
 .history-list h2,
 .history-detail h2 {
@@ -120,22 +161,22 @@ function reason(record: TestRecord): string {
 }
 .empty,
 .history-placeholder {
-  color: #91a9a2;
+  color: var(--text-tertiary);
   margin-top: 40px;
 }
 .history-item {
   display: block;
   width: 100%;
   border: 0;
-  border-bottom: 1px solid #ffffff18;
+  border-bottom: 1px solid var(--line);
   text-align: left;
   background: transparent;
-  color: #e4f0eb;
+  color: var(--text-primary);
   padding: 16px 12px;
   cursor: pointer;
 }
 .history-item.chosen {
-  background: #a9edcf15;
+  background: var(--accent-wash);
   border-radius: 10px;
 }
 .history-item span,
@@ -145,7 +186,7 @@ function reason(record: TestRecord): string {
 }
 .history-item span {
   font-size: 12px;
-  color: #9eb4ad;
+  color: var(--text-secondary);
 }
 .history-item strong {
   font-size: 20px;
@@ -154,11 +195,16 @@ function reason(record: TestRecord): string {
 }
 .history-item small {
   font-size: 11px;
-  color: #8da7a1;
+  color: var(--text-tertiary);
 }
 .history-detail {
+  min-height: 0;
   overflow: auto;
-  padding-right: 8px;
+  scrollbar-width: none;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--app-surface);
 }
 .detail-top {
   display: flex;
@@ -169,37 +215,55 @@ function reason(record: TestRecord): string {
   margin-top: 8px;
 }
 .detail-status {
-  color: #a9edcf;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 .detail-times {
   display: flex;
   gap: 24px;
-  color: #8ea9a0;
+  color: var(--text-tertiary);
   font-size: 11px;
   margin-top: 18px;
 }
 .detail-stats {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
-  border-block: 1px solid #ffffff20;
-  padding: 26px 0;
-  margin-top: 32px;
+  padding: 0;
+  margin-top: 24px;
+}
+.detail-stats > div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
 }
 .detail-stats label {
   display: block;
-  color: #8ea9a0;
+  color: var(--text-tertiary);
   font-size: 11px;
   margin-bottom: 10px;
 }
 .detail-stats strong {
   font-weight: 580;
   font-size: 16px;
+  overflow-wrap: anywhere;
 }
 .detail-chart {
-  height: 260px;
+  min-height: 260px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  gap: 14px;
   margin: 22px 0 30px;
+}
+.detail-chart > :deep(.speed-chart-wrap) {
+  height: 240px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
 }
 .history-detail h3 {
   font-size: 14px;
@@ -210,12 +274,34 @@ function reason(record: TestRecord): string {
   grid-template-columns: 1.5fr 1.5fr 1fr 1fr;
   gap: 10px;
   padding: 12px 0;
-  border-bottom: 1px solid #ffffff17;
-  color: #aabfb8;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-secondary);
   font-size: 12px;
 }
 .error {
   color: #f0b79d;
   font-size: 12px;
+}
+@media (max-width: 1100px) {
+  .history-layout {
+    grid-template-columns: 250px minmax(0, 1fr);
+    gap: 20px;
+  }
+  .detail-stats {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 820px) {
+  .history-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 220px minmax(0, 1fr);
+    gap: 12px;
+  }
+  .history-list {
+    max-height: none;
+    min-height: 0;
+    border: 1px solid var(--line);
+    padding: 14px;
+  }
 }
 </style>

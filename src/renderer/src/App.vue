@@ -1,32 +1,69 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-import type { AppSnapshot } from '../../shared/types'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { AppSnapshot, ChannelHealthMap } from '../../shared/types'
 import { APP_VERSION } from '../../shared/version'
 import MainView from './components/MainView.vue'
 import HistoryView from './components/HistoryView.vue'
 
 const snapshot = ref<AppSnapshot | null>(null)
+const channelHealth = ref<ChannelHealthMap>({})
 const tab = ref<'live' | 'history'>('live')
-const error = ref<string | null>(null)
+type NoticeLevel = 'error' | 'warning'
+const notice = ref<{ message: string; level: NoticeLevel } | null>(null)
+const dismissedSnapshotError = ref<string | null>(null)
 let unsubscribe: (() => void) | null = null
+let unsubscribeChannelHealth: (() => void) | null = null
+
+watch(
+  () => snapshot.value?.error,
+  (message) => {
+    if (!message) {
+      dismissedSnapshotError.value = null
+      return
+    }
+    if (message !== dismissedSnapshotError.value) showError(message)
+  }
+)
 
 onMounted(async () => {
   unsubscribe = window.networkTest.onSnapshot((value) => {
     snapshot.value = value
   })
+  unsubscribeChannelHealth = window.networkTest.onChannelHealth((value) => {
+    channelHealth.value = value
+  })
   try {
-    snapshot.value = await window.networkTest.snapshot()
+    const [initialSnapshot, initialHealth] = await Promise.all([
+      window.networkTest.snapshot(),
+      window.networkTest.channelHealth()
+    ])
+    snapshot.value = initialSnapshot
+    channelHealth.value = initialHealth
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause)
+    showError(cause instanceof Error ? cause.message : String(cause))
   }
 })
-onBeforeUnmount(() => unsubscribe?.())
+onBeforeUnmount(() => {
+  unsubscribe?.()
+  unsubscribeChannelHealth?.()
+})
 
 function minimizeWindow(): void {
   void window.networkTest.minimizeMain()
 }
 function closeWindow(): void {
   void window.networkTest.closeMain()
+}
+function showError(message: string): void {
+  dismissedSnapshotError.value = null
+  notice.value = { message, level: 'error' }
+}
+function showWarning(message: string): void {
+  notice.value = { message, level: 'warning' }
+}
+function dismissNotice(): void {
+  if (notice.value?.level === 'error') dismissedSnapshotError.value = notice.value.message
+  notice.value = null
 }
 </script>
 
@@ -66,15 +103,29 @@ function closeWindow(): void {
       </header>
       <main class="content">
         <div v-if="!snapshot" class="loading">
-          正在连接测速引擎… <span v-if="error">{{ error }}</span>
+          正在连接测速引擎…
         </div>
         <template v-else>
-          <MainView v-if="tab === 'live'" :snapshot="snapshot" @error="error = $event" />
+          <MainView
+            v-if="tab === 'live'"
+            :snapshot="snapshot"
+            :channel-health="channelHealth"
+            @error="showError"
+            @warning="showWarning"
+          />
           <HistoryView v-else :snapshot="snapshot" />
-          <div v-if="error" class="toast" role="alert">
-            {{ error }}<button @click="error = null">关闭</button>
-          </div>
         </template>
+        <button
+          v-if="notice"
+          class="toast"
+          :class="`toast--${notice.level}`"
+          :aria-label="`${notice.level === 'error' ? '错误' : '警告'}提示，点击关闭`"
+          :role="notice.level === 'error' ? 'alert' : 'status'"
+          type="button"
+          @click="dismissNotice"
+        >
+          {{ notice.message }}
+        </button>
       </main>
     </div>
   </div>

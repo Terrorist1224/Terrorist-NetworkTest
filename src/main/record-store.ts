@@ -13,19 +13,28 @@ import type {
   StopReason,
   TestRecord,
   TestSegment,
-  TestSettings
+  TestSettings,
+  TrafficDirection,
+  TestMode
 } from '../shared/types'
 
 type RecordEvent =
   | { kind: 'start'; id: string; at: number; settings: TestSettings }
   | { kind: 'segment'; segment: TestSegment }
-  | { kind: 'sample'; sample: SpeedSample; activeDurationMs?: number }
+  | {
+      kind: 'sample'
+      direction?: TrafficDirection
+      sample: SpeedSample
+      activeDurationMs?: number
+    }
   | { kind: 'pause' | 'resume'; at: number; activeDurationMs?: number }
   | {
       kind: 'end'
       at: number
       reason: StopReason
       totalBytes: number
+      downloadBytes?: number
+      uploadBytes?: number
       activeDurationMs?: number
       error?: string
     }
@@ -36,6 +45,7 @@ export function parseRecord(text: string): TestRecord | null {
   let record: TestRecord | null = null
   let latestEventAt = 0
   let hasActiveDuration = false
+  const sampleRates = new Map<number, { download: number; upload: number }>()
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue
     let event: RecordEvent
@@ -45,15 +55,27 @@ export function parseRecord(text: string): TestRecord | null {
       continue
     }
     if (event.kind === 'start') {
+      const mode: TestMode =
+        event.settings.mode === 'upload' || event.settings.mode === 'parallel'
+          ? event.settings.mode
+          : 'download'
       record = {
         id: event.id,
         startedAt: event.at,
         activeDurationMs: 0,
+        mode,
         totalBytes: 0,
         averageBytesPerSec: 0,
         peakBytesPerSec: 0,
-        settings: event.settings,
+        downloadBytes: 0,
+        uploadBytes: 0,
+        downloadAverageBytesPerSec: 0,
+        uploadAverageBytesPerSec: 0,
+        downloadPeakBytesPerSec: 0,
+        uploadPeakBytesPerSec: 0,
+        settings: { ...event.settings, mode },
         samples: [],
+        uploadSamples: [],
         segments: []
       }
       latestEventAt = event.at
@@ -67,9 +89,30 @@ export function parseRecord(text: string): TestRecord | null {
       record.segments.push(event.segment)
       latestEventAt = event.segment.at
     } else if (record && event.kind === 'sample') {
-      record.samples.push(event.sample)
-      record.totalBytes = event.sample.totalBytes
-      record.peakBytesPerSec = Math.max(record.peakBytesPerSec, event.sample.bytesPerSec)
+      const direction = event.direction ?? 'download'
+      if (direction === 'upload') {
+        record.uploadSamples.push(event.sample)
+        record.uploadBytes = event.sample.totalBytes
+        record.uploadPeakBytesPerSec = Math.max(
+          record.uploadPeakBytesPerSec,
+          event.sample.bytesPerSec
+        )
+      } else {
+        record.samples.push(event.sample)
+        record.downloadBytes = event.sample.totalBytes
+        record.downloadPeakBytesPerSec = Math.max(
+          record.downloadPeakBytesPerSec,
+          event.sample.bytesPerSec
+        )
+      }
+      record.totalBytes = record.downloadBytes + record.uploadBytes
+      const rates = sampleRates.get(event.sample.at) ?? { download: 0, upload: 0 }
+      rates[direction] = event.sample.bytesPerSec
+      sampleRates.set(event.sample.at, rates)
+      record.peakBytesPerSec = Math.max(
+        record.peakBytesPerSec,
+        rates.download + rates.upload
+      )
       latestEventAt = event.sample.at
       if (Number.isFinite(event.activeDurationMs)) {
         record.activeDurationMs = event.activeDurationMs!
@@ -91,7 +134,16 @@ export function parseRecord(text: string): TestRecord | null {
     } else if (record && event.kind === 'end') {
       record.endedAt = event.at
       record.stopReason = event.reason
-      record.totalBytes = event.totalBytes
+      if (Number.isFinite(event.downloadBytes)) record.downloadBytes = event.downloadBytes!
+      if (Number.isFinite(event.uploadBytes)) record.uploadBytes = event.uploadBytes!
+      if (Number.isFinite(event.downloadBytes) || Number.isFinite(event.uploadBytes)) {
+        record.totalBytes = record.downloadBytes + record.uploadBytes
+      } else {
+        // Version 1.0 records stored only a total; that version tested downloads only.
+        if (record.mode === 'upload') record.uploadBytes = event.totalBytes
+        else record.downloadBytes = event.totalBytes
+        record.totalBytes = event.totalBytes
+      }
       record.error = event.error
       if (Number.isFinite(event.activeDurationMs)) {
         record.activeDurationMs = event.activeDurationMs!
@@ -115,6 +167,8 @@ export function parseRecord(text: string): TestRecord | null {
   }
   const elapsedSec = Math.max(record.activeDurationMs / 1000, 0.001)
   record.averageBytesPerSec = record.totalBytes / elapsedSec
+  record.downloadAverageBytesPerSec = record.downloadBytes / elapsedSec
+  record.uploadAverageBytesPerSec = record.uploadBytes / elapsedSec
   return record
 }
 

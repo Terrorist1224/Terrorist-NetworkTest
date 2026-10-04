@@ -3,13 +3,21 @@ import { join } from 'node:path'
 import type { TestSettings } from '../shared/types'
 
 export const defaultSettings: TestSettings = {
-  channelId: 'cloudflare',
+  mode: 'download',
+  channelId: 'mcloud',
+  channelSelection: 'auto',
   threadCount: 8,
   maxDurationSec: 0,
   maxBytes: 0
 }
 
 export function validateSettings(settings: TestSettings): void {
+  if (!['download', 'upload', 'parallel'].includes(settings.mode)) throw new Error('测速模式无效')
+  if (
+    settings.channelSelection !== undefined &&
+    !['auto', 'manual'].includes(settings.channelSelection)
+  )
+    throw new Error('节点选择模式无效')
   if (
     !Number.isInteger(settings.threadCount) ||
     settings.threadCount < 0 ||
@@ -32,6 +40,9 @@ export function validateSettings(settings: TestSettings): void {
 function normalizeSavedSettings(settings: TestSettings): TestSettings {
   // Earlier builds allowed arbitrary counts; map saved values to the new picker choices.
   if (![0, 4, 8, 16, 32].includes(settings.threadCount)) settings.threadCount = 8
+  if (!['download', 'upload', 'parallel'].includes(settings.mode)) settings.mode = 'download'
+  if (settings.channelSelection !== 'auto' && settings.channelSelection !== 'manual')
+    settings.channelSelection = 'auto'
   return settings
 }
 
