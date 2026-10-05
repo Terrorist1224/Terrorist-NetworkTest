@@ -133,9 +133,25 @@ button {
   font-size: 20px;
   line-height: 1;
 }
-.window-control:hover {
+.immersive-control {
+  width: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+.immersive-control span:first-child {
+  font-size: 17px;
+}
+.window-control:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--panel-raised);
+}
+.window-control:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 .window-control.close-control:hover {
   color: var(--text-primary);

@@ -17,7 +17,16 @@ const userDataDirectory = packagedRun
 mkdirSync(output, { recursive: true })
 mkdirSync(userDataDirectory, { recursive: true })
 writeFileSync(join(userDataDirectory, 'ipapi-risk-key.enc'), 'obsolete-key-fixture')
-const server = createServer((_request, response) => {
+const server = createServer((request, response) => {
+  if (request.method === 'POST') {
+    request.resume()
+    request.on('end', () => {
+      if (response.destroyed) return
+      response.writeHead(204)
+      response.end()
+    })
+    return
+  }
   response.writeHead(200, {
     'Content-Type': 'application/octet-stream',
     'Content-Length': 2 * 1024 * 1024
@@ -40,6 +49,21 @@ const server = createServer((_request, response) => {
 })
 await new Promise((done) => server.listen(0, '127.0.0.1', done))
 const port = server.address().port
+const channelId = 'immersive-smoke-local'
+const channelUrl = `http://127.0.0.1:${port}/blob`
+writeFileSync(
+  join(userDataDirectory, 'channels.json'),
+  JSON.stringify([
+    {
+      id: channelId,
+      label: '本地集成测试',
+      url: channelUrl,
+      uploadUrl: channelUrl,
+      region: 'custom',
+      custom: true
+    }
+  ])
+)
 const executable = packagedRun
   ? resolve(workspace, 'release/win-unpacked/TerroristNetWorkTest.exe')
   : resolve(workspace, 'node_modules/electron/dist/electron.exe')
@@ -54,7 +78,7 @@ const electron = spawn(
         ? { NETWORKTEST_APP_DATA_DIR: appDataDirectory }
         : { NETWORKTEST_DATA_DIR: userDataDirectory })
     },
-    stdio: 'ignore'
+    stdio: 'inherit'
   }
 )
 
@@ -115,6 +139,31 @@ async function evaluate(client, expression) {
   return result.result.value
 }
 
+async function clickElement(client, selector) {
+  const position = await evaluate(
+    client,
+    `(() => {
+      const rect = document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect()
+      return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null
+    })()`
+  )
+  assert.ok(position, `Could not find clickable element ${selector}`)
+  await client.call('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: position.x,
+    y: position.y,
+    button: 'left',
+    clickCount: 1
+  })
+  await client.call('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: position.x,
+    y: position.y,
+    button: 'left',
+    clickCount: 1
+  })
+}
+
 try {
   const mainTarget = await waitFor(async () =>
     (await targets()).find(
@@ -123,8 +172,9 @@ try {
   )
   const main = await connect(mainTarget)
   assert.equal(await evaluate(main, 'typeof window.networkTest'), 'object')
+  assert.equal(await evaluate(main, 'typeof window.networkTest.setImmersive'), 'function')
   assert.equal(existsSync(join(userDataDirectory, 'ipapi-risk-key.enc')), false)
-  assert.equal(await evaluate(main, 'document.title'), 'NetworkTest 1.2.0')
+  assert.equal(await evaluate(main, 'document.title'), 'NetworkTest 1.3.0')
   const initial = await evaluate(
     main,
     'window.networkTest.snapshot().then(s => ({running:s.running,channels:s.channels.length}))'
@@ -143,6 +193,14 @@ try {
   await waitFor(
     async () => await evaluate(main, "document.querySelectorAll('.nav-item').length === 3")
   )
+  assert.equal(
+    await evaluate(main, "document.querySelector('.brand span')?.textContent.trim()"),
+    'NetworkTest 1.3.0'
+  )
+  await waitFor(
+    async () => await evaluate(main, "document.getElementById('immersive-mode') !== null")
+  )
+  assert.equal(await evaluate(main, "document.getElementById('immersive-mode').disabled"), true)
   assert.equal(
     await evaluate(
       main,
@@ -295,14 +353,95 @@ try {
   writeFileSync(resolve(output, 'main.png'), Buffer.from(mainPng.data, 'base64'))
   await evaluate(main, "document.getElementById('channel').click(); true")
 
-  const channelId = await evaluate(
-    main,
-    `window.networkTest.addChannel('本地集成测试','http://127.0.0.1:${port}/blob').then(s => s.channels.at(-1).id)`
-  )
   await evaluate(
     main,
     `window.networkTest.start({mode:'download',channelId:'${channelId}',channelSelection:'manual',threadCount:2,maxDurationSec:${longRun ? 80 : 10},maxBytes:${longRun ? 1024 ** 3 : 1048576}})`
   )
+  await waitFor(
+    async () => await evaluate(main, "document.getElementById('immersive-mode')?.disabled === false")
+  )
+  await clickElement(main, '#immersive-mode')
+  await waitFor(
+    async () => await evaluate(main, "document.getElementById('immersive-view') !== null")
+  )
+  assert.equal(await evaluate(main, 'window.networkTest.setImmersive(true)'), true)
+  await waitFor(
+    async () =>
+      await evaluate(
+        main,
+        'window.networkTest.snapshot().then(s => s.record?.downloadBytes > 0 && s.record.samples.length > 0)'
+      )
+  )
+  await waitFor(
+    async () =>
+      await evaluate(
+        main,
+        "document.querySelector('#immersive-view .direction-card:first-child .metrics > div:nth-child(2) dd')?.textContent.trim() !== '0 B'"
+      )
+  )
+  const immersiveMetrics = await evaluate(
+    main,
+    `(() => {
+      const view = document.getElementById('immersive-view')
+      return {
+        directions: Array.from(view.querySelectorAll('.direction-card')).map(card => ({
+          heading: card.querySelector('h2')?.textContent.trim(),
+          reading: card.querySelector('.speed-reading strong')?.textContent.trim(),
+          speed: card.querySelector('.speed-reading > span')?.textContent.trim(),
+          metrics: Array.from(card.querySelectorAll('.metrics dt')).map(item => item.textContent.trim()),
+          values: Array.from(card.querySelectorAll('.metrics dd')).map(item => item.textContent.trim()),
+          untested: card.querySelector('.untested-label')?.textContent.trim() ?? null
+        })),
+        aggregate: Array.from(view.querySelectorAll('.aggregate span')).map(item => item.textContent.trim()),
+        task: view.querySelector('.limit-block')?.textContent.replace(/\\s+/g, ' ').trim() ?? ''
+      }
+    })()`
+  )
+  assert.equal(immersiveMetrics.directions.length, 2)
+  assert.deepEqual(
+    immersiveMetrics.directions.map(({ heading, speed, metrics }) => ({ heading, speed, metrics })),
+    [
+      { heading: '下行', speed: '下行速度', metrics: ['下行带宽', '下行流量', '下行峰值'] },
+      { heading: '上行', speed: '上行速度', metrics: ['上行带宽', '上行流量', '上行峰值'] }
+    ]
+  )
+  assert.equal(immersiveMetrics.directions[1].untested, '未测试')
+  assert.notEqual(immersiveMetrics.directions[0].reading, '未测试')
+  assert.ok(immersiveMetrics.directions[0].values.every((value) => value !== '未测试'))
+  assert.equal(immersiveMetrics.directions[1].reading, '未测试')
+  assert.ok(immersiveMetrics.directions[1].values.every((value) => value === '未测试'))
+  assert.deepEqual(immersiveMetrics.aggregate, ['合计速度', '合计带宽', '合计流量'])
+  assert.match(immersiveMetrics.task, /下行限量/)
+  assert.match(immersiveMetrics.task, /剩余/)
+  const immersivePng = await main.call('Page.captureScreenshot', { format: 'png' })
+  writeFileSync(resolve(output, 'immersive.png'), Buffer.from(immersivePng.data, 'base64'))
+  const immersivePause = await evaluate(
+    main,
+    'window.networkTest.pause().then(s => ({paused:s.paused,running:s.running}))'
+  )
+  assert.equal(immersivePause.paused, true)
+  await waitFor(
+    async () =>
+      await evaluate(
+        main,
+        "document.getElementById('immersive-view') !== null && document.getElementById('immersive-status')?.textContent.trim() === '已暂停'"
+      )
+  )
+  await clickElement(main, '#immersive-view .exit-button')
+  await waitFor(async () => await evaluate(main, "document.getElementById('immersive-view') === null"))
+  assert.equal(await evaluate(main, 'window.networkTest.setImmersive(false)'), false)
+  await evaluate(main, 'window.networkTest.resume()')
+  await waitFor(
+    async () => await evaluate(main, 'window.networkTest.snapshot().then(s => s.running)')
+  )
+  await waitFor(
+    async () => await evaluate(main, "document.getElementById('immersive-mode')?.disabled === false")
+  )
+  await clickElement(main, '#immersive-mode')
+  await waitFor(
+    async () => await evaluate(main, "document.getElementById('immersive-view') !== null")
+  )
+  assert.equal(await evaluate(main, 'window.networkTest.setImmersive(true)'), true)
   const lockedChannel = await evaluate(
     main,
     'window.networkTest.setChannelSelection("auto").then(s => ({running:s.running,channelId:s.settings.channelId,selection:s.settings.channelSelection}))'
@@ -337,6 +476,13 @@ try {
       'window.networkTest.pause().then(s => ({running:s.running,paused:s.paused,samples:s.record.samples,uploadSamples:s.record.uploadSamples}))'
     )
     assert.equal(pausedState.paused, true)
+    await waitFor(
+      async () =>
+        await evaluate(
+          main,
+          "document.getElementById('immersive-view') !== null && document.getElementById('immersive-status')?.textContent.trim() === '已暂停'"
+        )
+    )
     assert.ok(pausedState.samples.length > 0)
     assert.equal(pausedState.uploadSamples.length, 0)
     await evaluate(main, 'window.networkTest.resume()')
@@ -362,6 +508,183 @@ try {
   assert.equal(final.reason, longRun ? 'time-limit' : 'traffic-limit')
   assert.ok(final.bytes >= 1048576)
   assert.ok(final.samples >= 1)
+  await waitFor(
+    async () =>
+      await evaluate(
+        main,
+        "document.getElementById('immersive-view') !== null && document.getElementById('immersive-status')?.textContent.trim() === '已结束'"
+      )
+  )
+  await main.call('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: 'Escape',
+    code: 'Escape',
+    windowsVirtualKeyCode: 27,
+    nativeVirtualKeyCode: 27
+  })
+  await main.call('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'Escape',
+    code: 'Escape',
+    windowsVirtualKeyCode: 27,
+    nativeVirtualKeyCode: 27
+  })
+  await waitFor(
+    async () => await evaluate(main, "document.getElementById('immersive-view') === null")
+  )
+  assert.equal(await evaluate(main, 'window.networkTest.setImmersive(false)'), false)
+
+  await evaluate(
+    main,
+    `window.networkTest.start({mode:'upload',channelId:'${channelId}',channelSelection:'manual',threadCount:2,maxDurationSec:60,maxBytes:0})`
+  )
+  await waitFor(
+    async () => await evaluate(main, "document.getElementById('immersive-mode')?.disabled === false")
+  )
+  await clickElement(main, '#immersive-mode')
+  await waitFor(
+    async () => await evaluate(main, "document.getElementById('immersive-view') !== null")
+  )
+  await waitFor(
+    async () =>
+      await evaluate(
+        main,
+        'window.networkTest.snapshot().then(s => s.running && s.record?.uploadBytes > 0)'
+      )
+  )
+  await waitFor(
+    async () =>
+      await evaluate(
+        main,
+        "document.querySelectorAll('#immersive-view .direction-card')[1]?.querySelectorAll('.metrics dd')[1]?.textContent.trim() !== '0 B'"
+      )
+  )
+  const timedUpload = await evaluate(
+    main,
+    `(() => {
+      const view = document.getElementById('immersive-view')
+      return {
+        mode: view.querySelector('.task-details dd')?.textContent.trim(),
+        directions: Array.from(view.querySelectorAll('.direction-card')).map(card => ({
+          heading: card.querySelector('h2')?.textContent.trim(),
+          reading: card.querySelector('.speed-reading strong')?.textContent.trim(),
+          values: Array.from(card.querySelectorAll('.metrics dd')).map(item => item.textContent.trim())
+        })),
+        limit: view.querySelector('.limit-block')?.textContent.replace(/\\s+/g, ' ').trim() ?? '',
+        maximum: Number(view.querySelector('.limit-item progress')?.max),
+        controls: Array.from(view.querySelectorAll('button')).map(button => button.textContent.trim())
+      }
+    })()`
+  )
+  assert.equal(timedUpload.mode, '上行测速')
+  assert.equal(timedUpload.directions[0].reading, '未测试')
+  assert.ok(timedUpload.directions[0].values.every((value) => value === '未测试'))
+  assert.notEqual(timedUpload.directions[1].reading, '未测试')
+  assert.ok(timedUpload.directions[1].values.every((value) => value !== '未测试'))
+  assert.match(timedUpload.limit, /限时任务/)
+  assert.match(timedUpload.limit, /剩余/)
+  assert.equal(timedUpload.maximum, 60000)
+  assert.deepEqual(timedUpload.controls, ['退出沉浸模式'])
+  await evaluate(main, 'window.networkTest.pause()')
+  await waitFor(
+    async () =>
+      await evaluate(
+        main,
+        "document.getElementById('immersive-status')?.textContent.trim() === '已暂停'"
+      )
+  )
+  await evaluate(main, 'window.networkTest.saveLimits({maxBytes:0,maxDurationSec:0})')
+  await waitFor(
+    async () => await evaluate(main, "document.querySelector('.limit-block')?.textContent.includes('无限制')")
+  )
+  await evaluate(main, 'window.networkTest.resume()')
+  await waitFor(
+    async () => await evaluate(main, 'window.networkTest.snapshot().then(s => s.running)')
+  )
+  await evaluate(main, 'window.networkTest.stop()')
+  await waitFor(
+    async () =>
+      await evaluate(
+        main,
+        "document.getElementById('immersive-status')?.textContent.trim() === '已结束'"
+      )
+  )
+  await clickElement(main, '#immersive-view .exit-button')
+  await waitFor(async () => await evaluate(main, "document.getElementById('immersive-view') === null"))
+  assert.equal(await evaluate(main, 'window.networkTest.setImmersive(false)'), false)
+
+  await evaluate(
+    main,
+    `window.networkTest.start({mode:'parallel',channelId:'${channelId}',channelSelection:'manual',threadCount:2,maxDurationSec:0,maxBytes:10485760})`
+  )
+  await waitFor(
+    async () => await evaluate(main, "document.getElementById('immersive-mode')?.disabled === false")
+  )
+  await clickElement(main, '#immersive-mode')
+  await waitFor(
+    async () => await evaluate(main, "document.getElementById('immersive-view') !== null")
+  )
+  await waitFor(
+    async () =>
+      await evaluate(
+        main,
+        'window.networkTest.snapshot().then(s => s.running && s.record?.downloadBytes > 0 && s.record.uploadBytes > 0 && s.record.samples.length > 0 && s.record.uploadSamples.length > 0)'
+      )
+  )
+  await waitFor(
+    async () =>
+      await evaluate(
+        main,
+        "(() => { const cards = document.querySelectorAll('#immersive-view .direction-card'); return cards.length === 2 && cards[0].querySelectorAll('.metrics dd')[1]?.textContent.trim() !== '0 B' && cards[1].querySelectorAll('.metrics dd')[1]?.textContent.trim() !== '0 B' })()"
+      )
+  )
+  const parallelImmersive = await evaluate(
+    main,
+    `(() => {
+      const view = document.getElementById('immersive-view')
+      return {
+        mode: view.querySelector('.task-details dd')?.textContent.trim(),
+        untested: view.querySelectorAll('.untested-label').length,
+        limits: Array.from(view.querySelectorAll('.limit-item')).map(item => ({
+          label: item.querySelector('.limit-title strong')?.textContent.trim(),
+          progressLabel: item.querySelector('progress')?.getAttribute('aria-label'),
+          maximum: Number(item.querySelector('progress')?.max),
+          remaining: item.querySelector('.limit-values span:last-child')?.textContent.trim()
+        })),
+        controls: Array.from(view.querySelectorAll('button')).map(button => button.textContent.trim())
+      }
+    })()`
+  )
+  assert.equal(parallelImmersive.mode, '并行测速')
+  assert.equal(parallelImmersive.untested, 0)
+  assert.deepEqual(parallelImmersive.limits.map(({ remaining, ...limit }) => limit), [
+    {
+      label: '下行限量',
+      progressLabel: '下行流量限额进度',
+      maximum: 10485760
+    },
+    {
+      label: '上行限量',
+      progressLabel: '上行流量限额进度',
+      maximum: 10485760
+    }
+  ])
+  assert.ok(parallelImmersive.limits.every(({ remaining }) => /^剩余 (?:[\d.]+ MB|0 B)$/.test(remaining)))
+  assert.deepEqual(parallelImmersive.controls, ['退出沉浸模式'])
+  const parallelImmersivePng = await main.call('Page.captureScreenshot', { format: 'png' })
+  writeFileSync(resolve(output, 'immersive-parallel.png'), Buffer.from(parallelImmersivePng.data, 'base64'))
+  await evaluate(main, 'window.networkTest.stop()')
+  await waitFor(
+    async () =>
+      await evaluate(
+        main,
+        "document.getElementById('immersive-status')?.textContent.trim() === '已结束'"
+      )
+  )
+  await clickElement(main, '#immersive-view .exit-button')
+  await waitFor(async () => await evaluate(main, "document.getElementById('immersive-view') === null"))
+  assert.equal(await evaluate(main, 'window.networkTest.setImmersive(false)'), false)
+
   const history = await evaluate(
     main,
     'window.networkTest.history().then(items => items.map(item => item.stopReason))'
@@ -404,7 +727,7 @@ try {
     JSON.stringify({
       result: 'passed',
       final,
-      screenshots: ['main.png', 'parallel.png', 'history.png'].map((name) => resolve(output, name)),
+      screenshots: ['main.png', 'parallel.png', 'immersive.png', 'immersive-parallel.png', 'history.png'].map((name) => resolve(output, name)),
       trayResidentAfterClose: processAlive
     })
   )

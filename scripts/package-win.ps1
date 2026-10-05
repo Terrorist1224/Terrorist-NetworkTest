@@ -4,7 +4,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $innoCompiler = Join-Path $env:ProgramFiles 'Inno Setup 7\ISIDE.exe'
 $installerScript = Join-Path $projectRoot 'installer\setup.iss'
 $appPayload = Join-Path $projectRoot 'release\win-unpacked\TerroristNetWorkTest.exe'
-$installerOutput = Join-Path $projectRoot 'release\Terrorist NetworkTest 1.2.0.exe'
+$installerOutput = Join-Path $projectRoot 'release\Terrorist NetworkTest 1.3.0.exe'
 $tempRoot = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetTempPath())
 $compileTimeoutMs = 15 * 60 * 1000
 

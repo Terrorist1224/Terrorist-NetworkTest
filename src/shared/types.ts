@@ -131,6 +131,7 @@ export interface DesktopApi {
   probeIp(): Promise<IpProbeResult>
   minimizeMain(): Promise<void>
   closeMain(): Promise<void>
+  setImmersive(enabled: boolean): Promise<boolean>
   onSnapshot(callback: (snapshot: AppSnapshot) => void): () => void
   onChannelHealth(callback: (health: ChannelHealthMap) => void): () => void
   changeMode(mode: TestMode): Promise<AppSnapshot>

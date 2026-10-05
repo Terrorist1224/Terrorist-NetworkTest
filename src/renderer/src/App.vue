@@ -5,10 +5,12 @@ import { APP_VERSION } from '../../shared/version'
 import MainView from './components/MainView.vue'
 import HistoryView from './components/HistoryView.vue'
 import IpProbeView from './components/IpProbeView.vue'
+import ImmersiveView from './components/ImmersiveView.vue'
 
 const snapshot = ref<AppSnapshot | null>(null)
 const channelHealth = ref<ChannelHealthMap>({})
 const tab = ref<'live' | 'history' | 'ip'>('live')
+const immersive = ref(false)
 const ipProbeActivation = ref(0)
 type NoticeLevel = 'error' | 'warning'
 const notice = ref<{ message: string; level: NoticeLevel } | null>(null)
@@ -28,6 +30,7 @@ watch(
 )
 
 onMounted(async () => {
+  window.addEventListener('keydown', handleKeydown)
   unsubscribe = window.networkTest.onSnapshot((value) => {
     snapshot.value = value
   })
@@ -46,12 +49,36 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeydown)
   unsubscribe?.()
   unsubscribeChannelHealth?.()
 })
 
 function minimizeWindow(): void {
   void window.networkTest.minimizeMain()
+}
+async function enterImmersive(): Promise<void> {
+  if (!snapshot.value?.running) return
+  try {
+    if (await window.networkTest.setImmersive(true)) immersive.value = true
+    else showError('未能进入全屏沉浸模式')
+  } catch (cause) {
+    showError(cause instanceof Error ? cause.message : String(cause))
+  }
+}
+async function exitImmersive(): Promise<void> {
+  if (!immersive.value) return
+  try {
+    await window.networkTest.setImmersive(false)
+    immersive.value = false
+  } catch (cause) {
+    showError(cause instanceof Error ? cause.message : String(cause))
+  }
+}
+function handleKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || !immersive.value) return
+  event.preventDefault()
+  void exitImmersive()
 }
 function closeWindow(): void {
   void window.networkTest.closeMain()
@@ -74,7 +101,12 @@ function dismissNotice(): void {
 </script>
 
 <template>
-  <div class="desktop-backdrop">
+  <ImmersiveView
+    v-if="immersive && snapshot"
+    :snapshot="snapshot"
+    @exit="exitImmersive"
+  />
+  <div v-else class="desktop-backdrop">
     <div class="app-shell">
       <header class="window-bar">
         <div class="brand" :aria-label="`NetworkTest ${APP_VERSION}`">
@@ -97,6 +129,17 @@ function dismissNotice(): void {
           </button>
         </nav>
         <div class="window-controls">
+          <button
+            id="immersive-mode"
+            class="window-control immersive-control"
+            aria-label="沉浸模式"
+            title="沉浸模式"
+            :disabled="!snapshot?.running"
+            @click="enterImmersive"
+          >
+            <span aria-hidden="true">⛶</span>
+            <span>沉浸模式</span>
+          </button>
           <button class="window-control" aria-label="最小化" title="最小化" @click="minimizeWindow">
             <span aria-hidden="true">−</span>
           </button>

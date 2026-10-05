@@ -63,6 +63,7 @@ let quitting = false
 let speedtestCnRefreshTimer: ReturnType<typeof setInterval> | null = null
 let lastSnapshotWasTesting = false
 let speedStartInProgress = false
+const immersiveWindows = new WeakSet<BrowserWindow>()
 
 function synchronizeAutomaticChannel(health = channelHealthMonitor.snapshot()): AppSnapshot {
   const snapshot = engine.snapshot()
@@ -143,6 +144,48 @@ function loadRenderer(window: BrowserWindow): void {
   else void window.loadFile(join(__dirname, '../renderer/index.html'))
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
+}
+
+function setWindowFullscreen(window: BrowserWindow, enabled: boolean): Promise<boolean> {
+  if (window.isDestroyed()) return Promise.resolve(false)
+  const isFullscreen = immersiveWindows.has(window) || window.isFullScreen()
+  if (isFullscreen === enabled) return Promise.resolve(enabled)
+
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout>
+    const finish = (completed: boolean): void => {
+      clearTimeout(timer)
+      if (enabled) window.removeListener('enter-full-screen', onTransition)
+      else window.removeListener('leave-full-screen', onTransition)
+      window.removeListener('closed', onClosed)
+      if (window.isDestroyed()) reject(new Error('主窗口已关闭'))
+      else if (completed) resolve(enabled)
+      else reject(new Error(enabled ? '未能进入全屏沉浸模式' : '未能退出全屏沉浸模式'))
+    }
+    const onTransition = (): void => {
+      if (enabled) immersiveWindows.add(window)
+      else immersiveWindows.delete(window)
+      finish(true)
+    }
+    const onClosed = (): void => finish(false)
+
+    if (enabled) window.once('enter-full-screen', onTransition)
+    else window.once('leave-full-screen', onTransition)
+    window.once('closed', onClosed)
+    timer = setTimeout(() => {
+      const completed =
+        !window.isDestroyed() &&
+        (enabled
+          ? window.isFullScreen()
+          : !immersiveWindows.has(window) && !window.isFullScreen())
+      if (completed) {
+        if (enabled) immersiveWindows.add(window)
+        else immersiveWindows.delete(window)
+      }
+      finish(completed)
+    }, 2000)
+    window.setFullScreen(enabled)
+  })
 }
 
 function createMainWindow(): BrowserWindow {
@@ -243,6 +286,12 @@ function registerIpc(): void {
   ipcMain.handle('ip-probe:lookup', () => ipProbeService.lookup())
   ipcMain.handle('window:minimize', () => mainWindow?.minimize())
   ipcMain.handle('window:close', () => mainWindow?.close())
+  ipcMain.handle('window:immersive', (_event, enabled: unknown) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false
+    if (typeof enabled !== 'boolean')
+      return immersiveWindows.has(mainWindow) || mainWindow.isFullScreen()
+    return setWindowFullscreen(mainWindow, enabled)
+  })
 }
 
 app.whenReady().then(() => {

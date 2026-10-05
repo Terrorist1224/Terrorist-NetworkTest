@@ -29,6 +29,8 @@ const api: DesktopApi = {
   probeIp: (): Promise<IpProbeResult> => ipcRenderer.invoke('ip-probe:lookup'),
   minimizeMain: () => ipcRenderer.invoke('window:minimize'),
   closeMain: () => ipcRenderer.invoke('window:close'),
+  setImmersive: (enabled: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('window:immersive', enabled),
   onSnapshot: (callback: (snapshot: AppSnapshot) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, snapshot: AppSnapshot): void =>
       callback(snapshot)
